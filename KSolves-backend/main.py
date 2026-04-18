@@ -1,6 +1,7 @@
 import os
 import json
 import random
+import threading
 from datetime import datetime
 
 import requests
@@ -10,8 +11,7 @@ from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer, util
 
 # =====================================================
-# PURE BACKEND LOGIC (BASED ON USER COLAB .PY WORKFLOW)
-# Rule Based / Semantic / LLM Fallback / Human Escalation
+# FASTAPI APP
 # =====================================================
 
 app = FastAPI(title="ResolveAI Backend")
@@ -33,13 +33,16 @@ class TicketRequest(BaseModel):
     ticket_id: str = "AUTO1001"
 
 # =====================================================
-# LOAD MODEL
+# GLOBAL MODEL STATE
 # =====================================================
 
-model = SentenceTransformer("paraphrase-MiniLM-L3-v2")
+semantic_model = None
+model_ready = False
+model_loading = False
+intent_vectors = {}
 
 # =====================================================
-# INTENT DATASET (FROM YOUR BACKEND STYLE)
+# INTENT EXAMPLES (10 EACH)
 # =====================================================
 
 intent_examples = {
@@ -48,98 +51,163 @@ intent_examples = {
         "want refund",
         "money back",
         "refund my payment",
-        "charged wrongly refund",
-        "annual plan by mistake refund",
-        "cancel and refund"
+        "cancel and refund",
+        "wrong plan refund",
+        "double payment refund",
+        "refund extra charge",
+        "return my money",
+        "billing refund request"
     ],
 
     "late_delivery": [
-        "parcel not arrived",
-        "delivery delayed",
+        "parcel delayed",
         "where is my order",
-        "shipment is late",
-        "still not delivered",
-        "track package"
+        "delivery late",
+        "not delivered yet",
+        "shipment delayed",
+        "tracking not updated",
+        "package stuck",
+        "courier not arrived",
+        "order still pending",
+        "delivery taking too long"
     ],
 
     "replacement": [
-        "item broken",
         "damaged product",
         "need replacement",
-        "wrong product received",
-        "box empty",
-        "faulty item"
+        "wrong item received",
+        "broken item",
+        "replace defective product",
+        "screen cracked",
+        "item not working",
+        "received damaged parcel",
+        "want exchange product",
+        "faulty product replacement"
     ],
 
     "account_issue": [
         "cannot login",
         "login failed",
-        "password reset failed",
+        "password reset",
         "account locked",
-        "signin problem",
-        "saml login issue"
+        "saml login issue",
+        "unable to access account",
+        "forgot password",
+        "otp not received",
+        "authentication failed",
+        "sign in error"
     ],
 
     "coupon_issue": [
         "coupon not working",
-        "promo code invalid",
+        "promo invalid",
         "discount failed",
-        "voucher issue"
+        "voucher not applying",
+        "promo expired",
+        "discount code invalid",
+        "offer not working",
+        "coupon rejected",
+        "promo code issue",
+        "cashback not applied"
     ],
 
     "payment_issue": [
         "charged twice",
-        "duplicate payment",
-        "money deducted no order",
-        "invoice issue",
         "billing issue",
-        "tax charged wrongly"
+        "invoice mismatch",
+        "tax issue",
+        "duplicate charge",
+        "wrong invoice",
+        "payment failed but money deducted",
+        "extra billing",
+        "seat billing mismatch",
+        "finance reconciliation needed"
     ],
 
     "cancel_order": [
         "cancel my order",
         "ordered by mistake",
-        "please cancel purchase"
+        "cancel purchase",
+        "stop my order",
+        "abort order request",
+        "cancel subscription",
+        "close my account",
+        "terminate order",
+        "need cancellation",
+        "reverse order now"
     ],
 
     "complaint_general": [
-        "bad experience",
-        "poor service",
         "very frustrated",
         "nothing is working",
-        "terrible support",
-        "disappointed with service"
+        "bad experience",
+        "poor support",
+        "terrible service",
+        "i am angry",
+        "worst experience",
+        "nobody helping me",
+        "very disappointed",
+        "not satisfied with service"
     ]
 }
 
 # =====================================================
-# EMBEDDINGS
+# MODEL LOADER
 # =====================================================
 
-intent_vectors = {}
+def load_semantic_model():
+    global semantic_model, model_ready, model_loading, intent_vectors
 
-for intent, phrases in intent_examples.items():
-    intent_vectors[intent] = model.encode(
-        phrases,
-        convert_to_tensor=True
+    if model_ready or model_loading:
+        return
+
+    model_loading = True
+
+    try:
+        semantic_model = SentenceTransformer(
+            "paraphrase-MiniLM-L3-v2",
+            device="cpu"
+        )
+
+        for intent, phrases in intent_examples.items():
+            intent_vectors[intent] = semantic_model.encode(
+                phrases,
+                convert_to_tensor=True
+            )
+
+        model_ready = True
+
+    except Exception:
+        model_ready = False
+
+    model_loading = False
+
+
+def start_warmup():
+    thread = threading.Thread(
+        target=load_semantic_model,
+        daemon=True
     )
-
-# =====================================================
-# CONFIG
-# =====================================================
-
-LOCAL_THRESHOLD = 0.75
-ESCALATE_THRESHOLD = 0.65
+    thread.start()
 
 # =====================================================
 # LOCAL SEMANTIC CLASSIFIER
 # =====================================================
 
 def classify_local(ticket_text):
-    query = model.encode(ticket_text, convert_to_tensor=True)
+    if not model_ready:
+        return {
+            "intent": "unknown_intent",
+            "confidence": 0.0
+        }
+
+    query = semantic_model.encode(
+        ticket_text,
+        convert_to_tensor=True
+    )
 
     best_intent = "unknown_intent"
-    best_score = 0
+    best_score = 0.0
 
     for intent, vectors in intent_vectors.items():
         score = float(util.cos_sim(query, vectors)[0].max())
@@ -154,10 +222,10 @@ def classify_local(ticket_text):
     }
 
 # =====================================================
-# OPENROUTER FALLBACK
+# OPENROUTER LLM FALLBACK
 # =====================================================
 
-def openrouter_classify(ticket_text):
+def llm_fallback(ticket_text):
     api_key = os.getenv("OPENROUTER_API_KEY")
 
     if not api_key:
@@ -167,7 +235,7 @@ def openrouter_classify(ticket_text):
         }
 
     prompt = f"""
-Classify customer support ticket into one category only:
+Classify the customer support ticket into exactly one label:
 
 refund
 late_delivery
@@ -178,7 +246,7 @@ payment_issue
 cancel_order
 complaint_general
 
-Return only JSON:
+Return only JSON format:
 {{"intent":"refund","confidence":0.91}}
 
 Ticket:
@@ -199,7 +267,7 @@ Ticket:
                 ],
                 "temperature": 0
             },
-            timeout=25
+            timeout=20
         )
 
         data = response.json()
@@ -222,8 +290,11 @@ Ticket:
         }
 
 # =====================================================
-# SMART ROUTER
+# HYBRID DECISION ENGINE
 # =====================================================
+
+LOCAL_THRESHOLD = 0.75
+ESCALATE_THRESHOLD = 0.65
 
 def smart_classify(ticket_text):
     local_result = classify_local(ticket_text)
@@ -232,10 +303,10 @@ def smart_classify(ticket_text):
         return {
             "intent": local_result["intent"],
             "confidence": local_result["confidence"],
-            "source": "local_model"
+            "source": "semantic_local_model"
         }
 
-    llm_result = openrouter_classify(ticket_text)
+    llm_result = llm_fallback(ticket_text)
 
     if llm_result["confidence"] > local_result["confidence"]:
         return {
@@ -251,54 +322,14 @@ def smart_classify(ticket_text):
     }
 
 # =====================================================
-# TOOL FUNCTIONS
-# =====================================================
-
-def get_order(order_id):
-    return {
-        "order_id": order_id,
-        "amount": random.choice([499, 999, 1299, 2499]),
-        "status": random.choice(["processing", "shipped", "delivered"]),
-        "days_since_delivery": random.randint(0, 12)
-    }
-
-def check_refund_eligibility(order):
-    if order["status"] == "delivered" and order["days_since_delivery"] <= 7:
-        return True
-    return False
-
-# =====================================================
 # AGENTS
 # =====================================================
 
-def refund_agent(order_id):
-    order = get_order(order_id)
-
-    if check_refund_eligibility(order):
-        return {
-            "resolved": True,
-            "flow": "auto_resolved",
-            "message": f"Refund approved. ₹{order['amount']} credited in 3-5 business days."
-        }
-
-    return {
-        "resolved": False,
-        "flow": "escalated_to_human",
-        "message": "Refund request forwarded to support executive."
-    }
-
-def delivery_agent():
-    return {
-        "resolved": False,
-        "flow": "escalated_to_human",
-        "message": "Your request has been forwarded to logistics support."
-    }
-
-def replacement_agent():
+def refund_agent():
     return {
         "resolved": True,
         "flow": "auto_resolved",
-        "message": "Replacement request has been approved."
+        "message": "Refund approved. Amount will be credited in 3-5 business days."
     }
 
 def account_agent():
@@ -308,25 +339,18 @@ def account_agent():
         "message": "Password reset instructions have been sent to your registered email."
     }
 
-def coupon_agent():
+def escalate_agent():
+    return {
+        "resolved": False,
+        "flow": "escalated_to_human",
+        "message": "Your request has been forwarded to our support executive for review."
+    }
+
+def generic_agent():
     return {
         "resolved": True,
         "flow": "auto_resolved",
-        "message": "Fresh coupon code generated: KSOLVES10"
-    }
-
-def payment_agent():
-    return {
-        "resolved": False,
-        "flow": "escalated_to_human",
-        "message": "Billing request forwarded to finance support."
-    }
-
-def complaint_agent():
-    return {
-        "resolved": False,
-        "flow": "escalated_to_human",
-        "message": "Your complaint has been forwarded to our support executive for review."
+        "message": "Your request has been processed successfully."
     }
 
 # =====================================================
@@ -347,55 +371,24 @@ def master_agent(ticket_text, ticket_id):
         f"classified_intent -> {intent}",
         f"confidence -> {confidence}",
         f"classifier_source -> {source}",
+        f"semantic_model_ready -> {model_ready}",
         f"timestamp -> {datetime.now()}"
     ]
 
     if confidence < ESCALATE_THRESHOLD:
-        return {
-            "ticket_id": ticket_id,
-            "order_id": order_id,
-            "input_ticket": ticket_text,
-            "intent": intent,
-            "confidence": confidence,
-            "source": source,
-            "agent_response": {
-                "resolved": False,
-                "flow": "escalated_to_human",
-                "message": "Low confidence classification. Routed to human support."
-            },
-            "logs": logs
-        }
+        response = escalate_agent()
 
-    if intent == "refund":
-        response = refund_agent(order_id)
-
-    elif intent == "late_delivery":
-        response = delivery_agent()
-
-    elif intent == "replacement":
-        response = replacement_agent()
+    elif intent == "refund":
+        response = refund_agent()
 
     elif intent == "account_issue":
         response = account_agent()
 
-    elif intent == "coupon_issue":
-        response = coupon_agent()
-
-    elif intent == "payment_issue":
-        response = payment_agent()
-
-    elif intent == "cancel_order":
-        response = complaint_agent()
-
     elif intent == "complaint_general":
-        response = complaint_agent()
+        response = escalate_agent()
 
     else:
-        response = {
-            "resolved": False,
-            "flow": "escalated_to_human",
-            "message": "Request forwarded to support executive."
-        }
+        response = generic_agent()
 
     return {
         "ticket_id": ticket_id,
@@ -412,9 +405,33 @@ def master_agent(ticket_text, ticket_id):
 # ROUTES
 # =====================================================
 
+@app.on_event("startup")
+def startup_event():
+    start_warmup()
+
 @app.get("/")
 def home():
     return {"status": "ResolveAI Backend Running"}
+
+@app.get("/health")
+def health():
+    return {
+        "backend": "online",
+        "semantic_model": "ready" if model_ready else (
+            "loading" if model_loading else "idle"
+        ),
+        "llm_fallback": "active" if os.getenv("OPENROUTER_API_KEY") else "inactive"
+    }
+
+@app.get("/warmup")
+def warmup():
+    if not model_ready and not model_loading:
+        start_warmup()
+
+    return {
+        "status": "warmup_started",
+        "semantic_model": "ready" if model_ready else "loading"
+    }
 
 @app.post("/resolve-ticket")
 def resolve_ticket(data: TicketRequest):
