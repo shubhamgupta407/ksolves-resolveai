@@ -152,28 +152,64 @@ vectorizer = TfidfVectorizer()
 phrase_matrix = vectorizer.fit_transform(all_phrases)
 
 # =====================================================
-# CLASSIFIER
+# CLASSIFIER (UPDATED LOGIC ONLY)
 # =====================================================
+
+def keyword_score(text, phrases):
+    text_lower = text.lower()
+    best = 0.0
+
+    for phrase in phrases:
+        phrase_lower = phrase.lower()
+
+        if phrase_lower in text_lower:
+            best = max(best, 0.95)
+        else:
+            phrase_words = phrase_lower.split()
+            hit_count = sum(1 for word in phrase_words if word in text_lower)
+
+            if len(phrase_words) > 0:
+                partial = hit_count / len(phrase_words)
+                best = max(best, partial * 0.85)
+
+    return round(best, 3)
 
 def classify_ticket(text):
     query_vec = vectorizer.transform([text])
-    scores = cosine_similarity(query_vec, phrase_matrix)[0]
+    semantic_scores = cosine_similarity(query_vec, phrase_matrix)[0]
 
-    best_idx = scores.argmax()
-    best_score = float(scores[best_idx])
-    best_intent = phrase_to_intent[best_idx]
+    best_intent = "complaint_general"
+    best_final_score = 0.0
+
+    for intent, phrases in intent_phrases.items():
+        indices = [
+            i for i, mapped_intent in enumerate(phrase_to_intent)
+            if mapped_intent == intent
+        ]
+
+        semantic_score = max([semantic_scores[i] for i in indices])
+        keyword_match_score = keyword_score(text, phrases)
+
+        final_score = (
+            keyword_match_score * 0.40 +
+            float(semantic_score) * 0.60
+        )
+
+        if final_score > best_final_score:
+            best_final_score = final_score
+            best_intent = intent
 
     return {
         "ticket": text,
         "intent": best_intent,
-        "confidence": round(best_score, 3)
+        "confidence": round(best_final_score, 3)
     }
 
 # =====================================================
-# ROUTER
+# ROUTER (UPDATED THRESHOLD ONLY)
 # =====================================================
 
-CONFIDENCE_THRESHOLD = 0.75
+CONFIDENCE_THRESHOLD = 0.60
 
 def route_ticket(ticket_text):
     result = classify_ticket(ticket_text)
@@ -329,7 +365,7 @@ def escalate(ticket_id, summary, priority):
     }
 
 # =====================================================
-# AGENTS (same backend logic)
+# AGENTS
 # =====================================================
 
 def refund_agent(ticket_id, order_id):
@@ -365,7 +401,7 @@ def refund_agent(ticket_id, order_id):
         }
 
     reply = send_reply(
-        "Your refund request has been forwarded to our support executive for manual review."
+            "Your refund request has been forwarded to our support executive for manual review."
     )
 
     return {
