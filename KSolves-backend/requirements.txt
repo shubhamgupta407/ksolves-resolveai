@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+pydantic
+sentence-transformers
+rapidfuzz
+pandas
+requests
+torch
