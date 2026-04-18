@@ -1,17 +1,19 @@
 import os
 import json
+import re
 import random
-import threading
 from datetime import datetime
 
 import requests
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from sentence_transformers import SentenceTransformer, util
+
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 # =====================================================
-# FASTAPI APP
+# FASTAPI
 # =====================================================
 
 app = FastAPI(title="ResolveAI Backend")
@@ -33,331 +35,463 @@ class TicketRequest(BaseModel):
     ticket_id: str = "AUTO1001"
 
 # =====================================================
-# GLOBAL MODEL STATE
+# PURE BACKEND LOGIC FROM YOUR COLAB
+# ONLY SEMANTIC ENGINE REPLACED:
+# SentenceTransformer -> TF-IDF
 # =====================================================
 
-semantic_model = None
-model_ready = False
-model_loading = False
-intent_vectors = {}
+intent_phrases = {
 
-# =====================================================
-# INTENT EXAMPLES (10 EACH)
-# =====================================================
-
-intent_examples = {
     "refund": [
-        "need refund",
-        "want refund",
-        "money back",
-        "refund my payment",
-        "cancel and refund",
-        "wrong plan refund",
-        "double payment refund",
-        "refund extra charge",
-        "return my money",
-        "billing refund request"
+        "need refund","want refund","money back","return my money",
+        "please refund me","i need my money back","charged wrongly refund",
+        "refund for this order","cancel and refund","reimburse payment"
     ],
 
-    "late_delivery": [
-        "parcel delayed",
-        "where is my order",
-        "delivery late",
-        "not delivered yet",
-        "shipment delayed",
-        "tracking not updated",
-        "package stuck",
-        "courier not arrived",
-        "order still pending",
-        "delivery taking too long"
+    "damaged_item": [
+        "item arrived damaged","product is broken","received broken item",
+        "defective product","product cracked","not working product",
+        "box damaged item damaged","item came unusable",
+        "received faulty item","product was destroyed"
     ],
 
-    "replacement": [
-        "damaged product",
-        "need replacement",
-        "wrong item received",
-        "broken item",
-        "replace defective product",
-        "screen cracked",
-        "item not working",
-        "received damaged parcel",
-        "want exchange product",
-        "faulty product replacement"
-    ],
-
-    "account_issue": [
-        "cannot login",
-        "login failed",
-        "password reset",
-        "account locked",
-        "saml login issue",
-        "unable to access account",
-        "forgot password",
-        "otp not received",
-        "authentication failed",
-        "sign in error"
-    ],
-
-    "coupon_issue": [
-        "coupon not working",
-        "promo invalid",
-        "discount failed",
-        "voucher not applying",
-        "promo expired",
-        "discount code invalid",
-        "offer not working",
-        "coupon rejected",
-        "promo code issue",
-        "cashback not applied"
-    ],
-
-    "payment_issue": [
-        "charged twice",
-        "billing issue",
-        "invoice mismatch",
-        "tax issue",
-        "duplicate charge",
-        "wrong invoice",
-        "payment failed but money deducted",
-        "extra billing",
-        "seat billing mismatch",
-        "finance reconciliation needed"
+    "tracking": [
+        "where is my order","track my package","track my parcel",
+        "delivery status","not delivered yet","when will it arrive",
+        "where is parcel","shipment update","package location",
+        "order still not received"
     ],
 
     "cancel_order": [
-        "cancel my order",
-        "ordered by mistake",
-        "cancel purchase",
-        "stop my order",
-        "abort order request",
-        "cancel subscription",
-        "close my account",
-        "terminate order",
-        "need cancellation",
-        "reverse order now"
+        "cancel my order","want to cancel","ordered by mistake",
+        "stop this purchase","do not ship order","please cancel order",
+        "cancel before dispatch","i dont need it now",
+        "abort my order","remove this order"
+    ],
+
+    "payment_issue": [
+        "payment failed","money deducted no order","charged twice",
+        "double payment happened","transaction problem","payment stuck",
+        "paid but no confirmation","amount debited",
+        "payment error","money gone no order"
+    ],
+
+    "replacement": [
+        "replace this item","need replacement","send another product",
+        "wrong item received","exchange product","want replacement",
+        "replace broken item","received wrong size replace",
+        "swap this item","new piece needed"
+    ],
+
+    "late_delivery": [
+        "delivery is late","order delayed","package late",
+        "still not arrived","why is delivery delayed",
+        "shipment taking too long","order running late",
+        "delivery overdue","parcel delayed","waiting too long"
+    ],
+
+    "missing_item": [
+        "item missing","box empty","one item not received",
+        "parts missing","package incomplete","missing accessories",
+        "received less items","product missing from package",
+        "nothing inside box","order incomplete"
+    ],
+
+    "address_change": [
+        "change delivery address","wrong address entered",
+        "update shipping address","modify address",
+        "need to change location","change my order address",
+        "edit delivery location","entered wrong pin code",
+        "wrong city selected","change destination"
+    ],
+
+    "account_issue": [
+        "cannot login","unable to login","account locked",
+        "password reset","forgot password",
+        "unable to access account","login issue",
+        "cant sign in","account blocked","signin failed"
+    ],
+
+    "coupon_issue": [
+        "coupon not working","promo code failed",
+        "discount code invalid","voucher not applying",
+        "coupon expired wrongly","offer code issue",
+        "promo rejected","discount unavailable",
+        "coupon error","promo not accepted"
+    ],
+
+    "warranty_claim": [
+        "claim warranty","under warranty repair",
+        "product stopped working later","need warranty support",
+        "repair under warranty","warranty request",
+        "item failed in warranty","warranty replacement needed",
+        "service under warranty","product dead after month"
     ],
 
     "complaint_general": [
-        "very frustrated",
-        "nothing is working",
-        "bad experience",
-        "poor support",
-        "terrible service",
-        "i am angry",
-        "worst experience",
-        "nobody helping me",
-        "very disappointed",
-        "not satisfied with service"
+        "very disappointed","bad experience","poor service",
+        "unhappy with order","terrible support","worst experience",
+        "not satisfied","this is unacceptable",
+        "extremely upset","frustrated with service"
     ]
 }
 
 # =====================================================
-# MODEL LOADER
+# TF-IDF ENGINE
 # =====================================================
 
-def load_semantic_model():
-    global semantic_model, model_ready, model_loading, intent_vectors
+all_phrases = []
+phrase_to_intent = []
 
-    if model_ready or model_loading:
-        return
+for intent, phrases in intent_phrases.items():
+    for p in phrases:
+        all_phrases.append(p)
+        phrase_to_intent.append(intent)
 
-    model_loading = True
-
-    try:
-        semantic_model = SentenceTransformer(
-            "paraphrase-MiniLM-L3-v2",
-            device="cpu"
-        )
-
-        for intent, phrases in intent_examples.items():
-            intent_vectors[intent] = semantic_model.encode(
-                phrases,
-                convert_to_tensor=True
-            )
-
-        model_ready = True
-
-    except Exception:
-        model_ready = False
-
-    model_loading = False
-
-
-def start_warmup():
-    thread = threading.Thread(
-        target=load_semantic_model,
-        daemon=True
-    )
-    thread.start()
+vectorizer = TfidfVectorizer()
+phrase_matrix = vectorizer.fit_transform(all_phrases)
 
 # =====================================================
-# LOCAL SEMANTIC CLASSIFIER
+# CLASSIFIER
 # =====================================================
 
-def classify_local(ticket_text):
-    if not model_ready:
-        return {
-            "intent": "unknown_intent",
-            "confidence": 0.0
-        }
+def classify_ticket(text):
+    query_vec = vectorizer.transform([text])
+    scores = cosine_similarity(query_vec, phrase_matrix)[0]
 
-    query = semantic_model.encode(
-        ticket_text,
-        convert_to_tensor=True
-    )
-
-    best_intent = "unknown_intent"
-    best_score = 0.0
-
-    for intent, vectors in intent_vectors.items():
-        score = float(util.cos_sim(query, vectors)[0].max())
-
-        if score > best_score:
-            best_score = score
-            best_intent = intent
+    best_idx = scores.argmax()
+    best_score = float(scores[best_idx])
+    best_intent = phrase_to_intent[best_idx]
 
     return {
+        "ticket": text,
         "intent": best_intent,
-        "confidence": round(best_score, 2)
+        "confidence": round(best_score, 3)
     }
 
 # =====================================================
-# OPENROUTER LLM FALLBACK
+# ROUTER
 # =====================================================
 
-def llm_fallback(ticket_text):
+CONFIDENCE_THRESHOLD = 0.75
+
+def route_ticket(ticket_text):
+    result = classify_ticket(ticket_text)
+
+    if result["confidence"] >= CONFIDENCE_THRESHOLD:
+        result["source"] = "local_model"
+        result["needs_llm"] = False
+    else:
+        result["source"] = "fallback_needed"
+        result["needs_llm"] = True
+
+    return result
+
+# =====================================================
+# OPENROUTER FALLBACK
+# =====================================================
+
+def openrouter_classify(ticket_text):
     api_key = os.getenv("OPENROUTER_API_KEY")
 
     if not api_key:
         return {
-            "intent": "unknown_intent",
-            "confidence": 0.50
+            "intent": "complaint_general",
+            "confidence": 0.40
         }
 
+    url = "https://openrouter.ai/api/v1/chat/completions"
+
     prompt = f"""
-Classify the customer support ticket into exactly one label:
+Classify this support ticket into exactly ONE category:
 
 refund
-late_delivery
+damaged_item
+tracking
+cancel_order
+payment_issue
 replacement
+late_delivery
+missing_item
+address_change
 account_issue
 coupon_issue
-payment_issue
-cancel_order
+warranty_claim
 complaint_general
 
-Return only JSON format:
-{{"intent":"refund","confidence":0.91}}
+Return ONLY JSON.
 
-Ticket:
-{ticket_text}
+{{"intent":"refund","confidence":0.92}}
+
+Ticket: {ticket_text}
 """
+
+    payload = {
+        "model": "openai/gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0
+    }
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
 
     try:
         response = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "model": "openai/gpt-3.5-turbo",
-                "messages": [
-                    {"role": "user", "content": prompt}
-                ],
-                "temperature": 0
-            },
+            url,
+            json=payload,
+            headers=headers,
             timeout=20
         )
 
         data = response.json()
         content = data["choices"][0]["message"]["content"].strip()
+        content = re.sub(r"```json|```", "", content).strip()
 
-        if content.startswith("```"):
-            content = content.replace("```json", "").replace("```", "").strip()
+        return json.loads(content)
 
-        result = json.loads(content)
-
+    except Exception:
         return {
-            "intent": result["intent"],
-            "confidence": round(float(result["confidence"]), 2)
-        }
-
-    except:
-        return {
-            "intent": "unknown_intent",
-            "confidence": 0.50
+            "intent": "complaint_general",
+            "confidence": 0.40
         }
 
 # =====================================================
-# HYBRID DECISION ENGINE
+# SMART CLASSIFIER
 # =====================================================
-
-LOCAL_THRESHOLD = 0.75
-ESCALATE_THRESHOLD = 0.65
 
 def smart_classify(ticket_text):
-    local_result = classify_local(ticket_text)
+    local_result = route_ticket(ticket_text)
 
-    if local_result["confidence"] >= LOCAL_THRESHOLD:
+    if local_result["needs_llm"] is False:
         return {
+            "ticket": ticket_text,
             "intent": local_result["intent"],
             "confidence": local_result["confidence"],
-            "source": "semantic_local_model"
+            "source": "local_model"
         }
 
-    llm_result = llm_fallback(ticket_text)
+    llm_result = openrouter_classify(ticket_text)
 
-    if llm_result["confidence"] > local_result["confidence"]:
+    return {
+        "ticket": ticket_text,
+        "intent": llm_result["intent"],
+        "confidence": llm_result["confidence"],
+        "source": "openrouter_fallback"
+    }
+
+# =====================================================
+# TOOLS
+# =====================================================
+
+def get_order(order_id):
+    return {
+        "order_id": order_id,
+        "customer": "Shubham",
+        "amount": 1299,
+        "status": random.choice(["shipped", "delivered", "processing"]),
+        "days_since_delivery": random.randint(0, 15)
+    }
+
+def check_refund_eligibility(order):
+    eligible = (
+        order["status"] == "delivered"
+        and order["days_since_delivery"] <= 7
+    )
+
+    return {
+        "eligible": eligible,
+        "reason": "Within 7-day return window"
+        if eligible else
+        "Refund window expired or not delivered"
+    }
+
+def issue_refund(order):
+    return {
+        "success": True,
+        "amount": order["amount"],
+        "txn_id": "RF" + str(random.randint(10000, 99999))
+    }
+
+def send_reply(message):
+    return {
+        "sent": True,
+        "message": message
+    }
+
+def escalate(ticket_id, summary, priority):
+    return {
+        "ticket_id": ticket_id,
+        "escalated": True,
+        "priority": priority,
+        "summary": summary
+    }
+
+# =====================================================
+# AGENTS (same backend logic)
+# =====================================================
+
+def refund_agent(ticket_id, order_id):
+    order = get_order(order_id)
+    eligibility = check_refund_eligibility(order)
+
+    if eligibility["eligible"]:
+        refund = issue_refund(order)
+
+        reply = send_reply(
+            f"Your refund request has been approved. "
+            f"Amount ₹{refund['amount']} will be credited "
+            f"within 3-5 business days. Ref ID: {refund['txn_id']}"
+        )
+
         return {
-            "intent": llm_result["intent"],
-            "confidence": llm_result["confidence"],
-            "source": "llm_fallback"
+            "ticket_id": ticket_id,
+            "resolved": True,
+            "flow": "auto_resolved",
+            "message": reply["message"]
         }
 
-    return {
-        "intent": local_result["intent"],
-        "confidence": local_result["confidence"],
-        "source": "local_model"
-    }
+    if order["status"] == "delivered" and order["days_since_delivery"] > 7:
+        reply = send_reply(
+            "Your refund request could not be approved because it is outside the 7-day return policy window."
+        )
 
-# =====================================================
-# AGENTS
-# =====================================================
+        return {
+            "ticket_id": ticket_id,
+            "resolved": True,
+            "flow": "auto_denied",
+            "message": reply["message"]
+        }
 
-def refund_agent():
-    return {
-        "resolved": True,
-        "flow": "auto_resolved",
-        "message": "Refund approved. Amount will be credited in 3-5 business days."
-    }
+    reply = send_reply(
+        "Your refund request has been forwarded to our support executive for manual review."
+    )
 
-def account_agent():
     return {
-        "resolved": True,
-        "flow": "auto_resolved",
-        "message": "Password reset instructions have been sent to your registered email."
-    }
-
-def escalate_agent():
-    return {
+        "ticket_id": ticket_id,
         "resolved": False,
         "flow": "escalated_to_human",
-        "message": "Your request has been forwarded to our support executive for review."
+        "message": reply["message"]
     }
 
-def generic_agent():
+def delivery_agent(ticket_id):
+    order = get_order(ticket_id)
+
+    if order["status"] == "shipped":
+        reply = send_reply(
+            f"Your order {order['order_id']} is in transit and will reach you soon. Tracking details have been shared."
+        )
+
+        return {
+            "ticket_id": ticket_id,
+            "resolved": True,
+            "flow": "auto_resolved",
+            "message": reply["message"]
+        }
+
+    elif order["status"] == "delivered":
+        reply = send_reply(
+            f"Our records show order {order['order_id']} has already been delivered successfully."
+        )
+
+        return {
+            "ticket_id": ticket_id,
+            "resolved": True,
+            "flow": "auto_resolved",
+            "message": reply["message"]
+        }
+
+    reply = send_reply(
+        "Your delivery request has been forwarded to our logistics support executive for priority review."
+    )
+
     return {
+        "ticket_id": ticket_id,
+        "resolved": False,
+        "flow": "escalated_to_human",
+        "message": reply["message"]
+    }
+
+def replacement_agent(ticket_id):
+    order = get_order(ticket_id)
+
+    if order["status"] == "delivered":
+        reply = send_reply(
+            f"Your replacement request for order {order['order_id']} has been approved. A new replacement order has been initiated."
+        )
+
+        return {
+            "ticket_id": ticket_id,
+            "resolved": True,
+            "flow": "auto_resolved",
+            "message": reply["message"]
+        }
+
+    elif order["status"] == "shipped":
+        reply = send_reply(
+            "Your replacement request has been forwarded to our support executive as the original order is still in transit."
+        )
+
+        return {
+            "ticket_id": ticket_id,
+            "resolved": False,
+            "flow": "escalated_to_human",
+            "message": reply["message"]
+        }
+
+    reply = send_reply(
+        "Your replacement request cannot be processed yet because the order is still under processing."
+    )
+
+    return {
+        "ticket_id": ticket_id,
+        "resolved": True,
+        "flow": "auto_denied",
+        "message": reply["message"]
+    }
+
+def complaint_agent(ticket_id):
+    reply = send_reply(
+        "We sincerely apologize for your experience. Your complaint has been forwarded to our senior support executive, who will assist you shortly."
+    )
+
+    return {
+        "ticket_id": ticket_id,
+        "resolved": False,
+        "flow": "escalated_to_human",
+        "message": reply["message"]
+    }
+
+def coupon_agent(ticket_id):
+    reply = send_reply(
+        "We verified your coupon issue. A fresh promo code has been generated for you: KSOLVES10"
+    )
+
+    return {
+        "ticket_id": ticket_id,
         "resolved": True,
         "flow": "auto_resolved",
-        "message": "Your request has been processed successfully."
+        "message": reply["message"]
+    }
+
+def account_agent(ticket_id):
+    reply = send_reply(
+        "We detected an account access issue. Password reset instructions have been sent to your registered email address."
+    )
+
+    return {
+        "ticket_id": ticket_id,
+        "resolved": True,
+        "flow": "auto_resolved",
+        "message": reply["message"]
     }
 
 # =====================================================
 # MASTER AGENT
 # =====================================================
 
-def master_agent(ticket_text, ticket_id):
+def master_agent(ticket_text, ticket_id="AUTO1001"):
     result = smart_classify(ticket_text)
 
     intent = result["intent"]
@@ -371,24 +505,61 @@ def master_agent(ticket_text, ticket_id):
         f"classified_intent -> {intent}",
         f"confidence -> {confidence}",
         f"classifier_source -> {source}",
-        f"semantic_model_ready -> {model_ready}",
         f"timestamp -> {datetime.now()}"
     ]
 
-    if confidence < ESCALATE_THRESHOLD:
-        response = escalate_agent()
+    if confidence < 0.65:
+        reply = send_reply(
+            "Your request has been forwarded to our support executive for manual review."
+        )
 
-    elif intent == "refund":
-        response = refund_agent()
+        return {
+            "ticket_id": ticket_id,
+            "order_id": order_id,
+            "input_ticket": ticket_text,
+            "intent": intent,
+            "confidence": confidence,
+            "source": source,
+            "agent_response": {
+                "resolved": False,
+                "flow": "escalated_to_human",
+                "message": reply["message"]
+            },
+            "logs": logs
+        }
 
-    elif intent == "account_issue":
-        response = account_agent()
+    try:
+        if intent == "refund":
+            response = refund_agent(ticket_id, order_id)
 
-    elif intent == "complaint_general":
-        response = escalate_agent()
+        elif intent in ["late_delivery", "tracking"]:
+            response = delivery_agent(ticket_id)
 
-    else:
-        response = generic_agent()
+        elif intent in ["replacement", "damaged_item", "missing_item"]:
+            response = replacement_agent(ticket_id)
+
+        elif intent == "complaint_general":
+            response = complaint_agent(ticket_id)
+
+        elif intent == "coupon_issue":
+            response = coupon_agent(ticket_id)
+
+        elif intent == "account_issue":
+            response = account_agent(ticket_id)
+
+        else:
+            response = {
+                "resolved": False,
+                "flow": "escalated_to_human",
+                "message": "Your request has been forwarded to our support executive for review."
+            }
+
+    except Exception:
+        response = {
+            "resolved": False,
+            "flow": "system_error",
+            "message": "A temporary issue occurred while processing your request."
+        }
 
     return {
         "ticket_id": ticket_id,
@@ -405,33 +576,9 @@ def master_agent(ticket_text, ticket_id):
 # ROUTES
 # =====================================================
 
-@app.on_event("startup")
-def startup_event():
-    start_warmup()
-
 @app.get("/")
 def home():
     return {"status": "ResolveAI Backend Running"}
-
-@app.get("/health")
-def health():
-    return {
-        "backend": "online",
-        "semantic_model": "ready" if model_ready else (
-            "loading" if model_loading else "idle"
-        ),
-        "llm_fallback": "active" if os.getenv("OPENROUTER_API_KEY") else "inactive"
-    }
-
-@app.get("/warmup")
-def warmup():
-    if not model_ready and not model_loading:
-        start_warmup()
-
-    return {
-        "status": "warmup_started",
-        "semantic_model": "ready" if model_ready else "loading"
-    }
 
 @app.post("/resolve-ticket")
 def resolve_ticket(data: TicketRequest):
