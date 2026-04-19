@@ -360,10 +360,9 @@ npm run dev
 
 # 🌐 Live Links
 
-```text
-Frontend Demo : Add your deployed frontend URL
-Backend API   : Add Swagger / Render URL
-```
+Frontend Demo : https://resolveai-platform.netlify.app/
+Backend API   : https://resolveai-backend-bv4e.onrender.com
+Swagger Docs  : https://resolveai-backend-bv4e.onrender.com/docs
 
 ---
 
