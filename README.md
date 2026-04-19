@@ -407,11 +407,7 @@ npm run dev
 
 ---
 
-# 🌐 Live Links
 
-Frontend Demo : https://resolveai-platform.netlify.app/
-Backend API   : https://resolveai-backend-bv4e.onrender.com
-Swagger Docs  : https://resolveai-backend-bv4e.onrender.com/docs
 
 ---
 
