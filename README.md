@@ -55,6 +55,55 @@ Modern support teams struggle with:
 ResolveAI solves this with **fast local AI + safe fallback intelligence + human control loops**.
 
 ---
+# 🌐 Live Links
+
+Frontend Demo : https://resolveai-platform.netlify.app/
+Backend API   : https://resolveai-backend-bv4e.onrender.com
+Swagger Docs  : https://resolveai-backend-bv4e.onrender.com/docs
+
+---
+
+
+
+## 📸 Product Screenshots
+
+### 1️⃣ Landing Page
+![Landing](./Screenshots/landing.png)
+
+### 2️⃣ Platform Overview
+![Overview](./Screenshots/Overview.png)
+
+### 3️⃣ Live Ticket Dashboard
+![Live Tickets](./Screenshots/liveTickets.png)
+
+### 4️⃣ Concurrent Batch Processing
+![Concurrenct Test](./Screenshots/ConcurrenctTest.png)
+
+### 5️⃣ AI Agent Network
+![Agent Network](./Screenshots/AgentNetwork.png)
+
+### 6️⃣ Resolution Center
+![Resolution Center](./Screenshots/ResolutionCenter.png)
+
+### 7️⃣ Human Escalation Review
+![Human Review](./Screenshots/HumanReview.png)
+
+### 8️⃣ Unified Audit Logs
+![Audit Logs](./Screenshots/AuditLogs.png)
+
+### 9️⃣ Analytics Dashboard
+![Analytics](./Screenshots/Analytics.png)
+
+### 🔟 Diagnostic Trace Details
+![Diagnostics](./Screenshots/Diagnosticdetails.png)
+
+### 1️⃣1️⃣ Live Platform Experience
+![Live Platform](./Screenshots/livePlatform.png)
+
+### 1️⃣2️⃣ End-to-End Workflow
+![Workflow](./Screenshots/Process.png)
+
+
 
 # 🧠 Intelligence Pipeline
 
