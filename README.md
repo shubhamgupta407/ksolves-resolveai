@@ -23,6 +23,10 @@ Automate repetitive support tickets using privacy-first local models, intelligen
 
 ---
 
+## 🎥 Live Demo
+
+[![Watch Demo on LinkedIn](https://img.shields.io/badge/▶_Watch_Demo-LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white)](https://linkedin.com/feed/update/urn:li:activity:7453215467521093633/)
+
 # 📌 Executive Summary
 
 ResolveAI is a production-style enterprise support automation platform designed to intelligently resolve customer tickets at scale.
