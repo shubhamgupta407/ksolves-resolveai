@@ -12,9 +12,7 @@ from pydantic import BaseModel
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-# =====================================================
-# FASTAPI
-# =====================================================
+
 
 app = FastAPI(title="ResolveAI Backend")
 
@@ -26,19 +24,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# =====================================================
-# REQUEST MODEL
-# =====================================================
+
 
 class TicketRequest(BaseModel):
     ticket: str
     ticket_id: str = "AUTO1001"
 
-# =====================================================
-# PURE BACKEND LOGIC FROM YOUR COLAB
-# ONLY SEMANTIC ENGINE REPLACED:
-# SentenceTransformer -> TF-IDF
-# =====================================================
+
 
 intent_phrases = {
 
@@ -151,9 +143,7 @@ for intent, phrases in intent_phrases.items():
 vectorizer = TfidfVectorizer()
 phrase_matrix = vectorizer.fit_transform(all_phrases)
 
-# =====================================================
-# CLASSIFIER (UPDATED LOGIC ONLY)
-# =====================================================
+
 
 def keyword_score(text, phrases):
     text_lower = text.lower()
@@ -205,9 +195,7 @@ def classify_ticket(text):
         "confidence": round(best_final_score, 3)
     }
 
-# =====================================================
-# ROUTER (UPDATED THRESHOLD ONLY)
-# =====================================================
+
 
 CONFIDENCE_THRESHOLD = 0.60
 
@@ -223,9 +211,7 @@ def route_ticket(ticket_text):
 
     return result
 
-# =====================================================
-# OPENROUTER FALLBACK
-# =====================================================
+
 
 def openrouter_classify(ticket_text):
     api_key = os.getenv("OPENROUTER_API_KEY")
@@ -293,9 +279,7 @@ Ticket: {ticket_text}
             "confidence": 0.40
         }
 
-# =====================================================
-# SMART CLASSIFIER
-# =====================================================
+
 
 def smart_classify(ticket_text):
     local_result = route_ticket(ticket_text)
@@ -317,9 +301,7 @@ def smart_classify(ticket_text):
         "source": "openrouter_fallback"
     }
 
-# =====================================================
-# TOOLS
-# =====================================================
+
 
 def get_order(order_id):
     return {
@@ -364,9 +346,7 @@ def escalate(ticket_id, summary, priority):
         "summary": summary
     }
 
-# =====================================================
-# AGENTS
-# =====================================================
+
 
 def refund_agent(ticket_id, order_id):
     order = get_order(order_id)
@@ -523,9 +503,7 @@ def account_agent(ticket_id):
         "message": reply["message"]
     }
 
-# =====================================================
-# MASTER AGENT
-# =====================================================
+
 
 def master_agent(ticket_text, ticket_id="AUTO1001"):
     result = smart_classify(ticket_text)
@@ -608,9 +586,7 @@ def master_agent(ticket_text, ticket_id="AUTO1001"):
         "logs": logs
     }
 
-# =====================================================
-# ROUTES
-# =====================================================
+
 
 @app.get("/")
 def home():
