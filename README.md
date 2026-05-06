@@ -23,6 +23,7 @@ Automate repetitive support tickets using privacy-first local models, intelligen
 
 ---
 
+[![Typing SVG](https://readme-typing-svg.demolab.com?font=Inter&weight=600&size=20&duration=3000&pause=800&color=6366F1&background=00000000&center=true&vCenter=true&multiline=false&width=700&height=45&lines=⚙️+Improving+backend+accuracy+%26+reliability...;🧠+Refining+semantic+routing+engine...;📊+Tuning+confidence+threshold+calibration...;🚀+Optimizing+LLM+fallback+pipeline...;🔬+Production-grade+intelligence+in+progress...)](https://git.io/typing-svg)
 ## 🎥 Live Demo
 
 [![Watch Demo on LinkedIn](https://img.shields.io/badge/▶_Watch_Demo-LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white)](https://linkedin.com/feed/update/urn:li:activity:7453215467521093633/)
